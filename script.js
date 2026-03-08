@@ -1,4 +1,4 @@
-const ws = new WebSocket("ws://"+location.host + "/ws");
+const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
 const pc = new RTCPeerConnection({
     iceServers: [{urls: "stun:stun.l.google.com:19302"}]
 });
@@ -6,31 +6,40 @@ const pc = new RTCPeerConnection({
 const local = document.getElementById("local");
 const remote = document.getElementById("remote");
 
+const mediaReady = navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
+    local.srcObject = stream;
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+});
+
 pc.ontrack = ({streams: [stream]}) => {
     remote.srcObject = stream;
 };
 
 pc.onicecandidate = ({candidate}) => {
-    ws.send(JSON.stringify({candidate}));
+    if (candidate) ws.send(JSON.stringify({candidate}));
 };
 
-ws.onmessage = ({data}) => {
+async function handleMessage(data) {
     const message = JSON.parse(data);
     if (message.candidate) {
         pc.addIceCandidate(message.candidate);
-    } else {
-        pc.setRemoteDescription(message.description);
+    } else if (message.join) {
+        await mediaReady;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({description: pc.localDescription}));
+    } else if (message.description && message.description.type === "offer") {
+        await mediaReady;
+        await pc.setRemoteDescription(message.description);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({description: pc.localDescription}));
+    } else if (message.description) {
+        await pc.setRemoteDescription(message.description);
     }
-};
-
-navigator.mediaDevices.getUserMedia({video: true, audio: true}).then(stream => {
-    local.srcObject = stream;
-    pc.addStream(stream);
-});
-
-
-ws.onopen = async () => {
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({description: pc.localDescription})); 
 }
+
+let queue = Promise.resolve();
+ws.onmessage = ({data}) => {
+    queue = queue.then(() => handleMessage(data));
+};

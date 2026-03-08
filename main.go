@@ -24,6 +24,9 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	mu.Lock()
+	for c := range clients {
+		c.WriteMessage(websocket.TextMessage, []byte(`{"join":true}`))
+	}
 	clients[conn] = true
 	mu.Unlock()
 
